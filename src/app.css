@@ -1,0 +1,9 @@
+/* src/app.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --tw-accent-color: #0ea5e9;
+    /* Sky 500 */
+}
