@@ -2,6 +2,8 @@
     import { servoStore } from "../stores/servo";
     import { arduinoStore } from "../stores/arduinoStore";
     import { invoke } from "@tauri-apps/api/core";
+    import { throttle } from "lodash-es";
+    import { onDestroy } from "svelte";
 
     // arduinoStore의 상태가 변경될 때마다 서보 각도 업데이트
     $: if ($arduinoStore) {
@@ -10,29 +12,37 @@
         });
     }
 
-    async function updateServos(id: number, angle: number) {
-        // 현재 모든 서보 각도 가져오기
-        const angles = $servoStore.map((servo) => servo.angle);
+    const throttledUpdateServos = throttle(
+        async (id: number, angle: number) => {
+            // 현재 모든 서보 각도 가져오기
+            const angles = $servoStore.map((servo) => servo.angle);
 
-        // 디지털 출력 상태는 현재 상태 유지
-        const digital_outputs = $arduinoStore?.digital_outputs || [
-            false,
-            false,
-            false,
-        ];
+            // 디지털 출력 상태는 현재 상태 유지
+            const digital_outputs = $arduinoStore?.digital_outputs || [
+                false,
+                false,
+                false,
+            ];
 
-        try {
-            await invoke("send_command", {
-                command: {
-                    angles,
-                    digital_outputs,
-                },
-            });
-            await arduinoStore.updateStatus(); // 상태 즉시 업데이트
-        } catch (error) {
-            console.error("서보 명령 전송 실패:", error);
-        }
-    }
+            try {
+                await invoke("send_command", {
+                    command: {
+                        angles,
+                        digital_outputs,
+                    },
+                });
+                await arduinoStore.updateStatus(); // 상태 즉시 업데이트
+            } catch (error) {
+                console.error("서보 명령 전송 실패:", error);
+            }
+        },
+        100,
+    ); // 100ms 쓰로틀링
+
+    // 컴포넌트가 제거될 때 쓰로틀된 함수의 대기 중인 호출 취소
+    onDestroy(() => {
+        throttledUpdateServos.cancel();
+    });
 </script>
 
 <div class="p-4">
@@ -48,7 +58,7 @@
                 min="0"
                 max="180"
                 bind:value={servo.angle}
-                on:input={() => updateServos(servo.id, servo.angle)}
+                on:input={() => throttledUpdateServos(servo.id, servo.angle)}
                 class="w-full"
             />
         </div>
