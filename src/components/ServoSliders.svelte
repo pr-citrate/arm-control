@@ -1,15 +1,25 @@
 <script lang="ts">
     import { servoStore } from "../stores/servo";
+    import { arduinoStore } from "../stores/arduinoStore";
     import { invoke } from "@tauri-apps/api/core";
+
+    // arduinoStore의 상태가 변경될 때마다 서보 각도 업데이트
+    $: if ($arduinoStore) {
+        $arduinoStore.servo_angles.forEach((angle, index) => {
+            servoStore.updateAngle(index + 1, angle);
+        });
+    }
 
     async function updateServos(id: number, angle: number) {
         // 현재 모든 서보 각도 가져오기
         const angles = $servoStore.map((servo) => servo.angle);
-        // 새로운 각도로 업데이트
-        angles[id - 1] = angle;
 
-        // 디지털 출력 상태는 변경하지 않음 (현재 상태 유지)
-        const digital_outputs = [false, false, false]; // 기본값 또는 store에서 가져오기
+        // 디지털 출력 상태는 현재 상태 유지
+        const digital_outputs = $arduinoStore?.digital_outputs || [
+            false,
+            false,
+            false,
+        ];
 
         try {
             await invoke("send_command", {
@@ -18,8 +28,9 @@
                     digital_outputs,
                 },
             });
+            await arduinoStore.updateStatus(); // 상태 즉시 업데이트
         } catch (error) {
-            console.error("Failed to send servo command:", error);
+            console.error("서보 명령 전송 실패:", error);
         }
     }
 </script>

@@ -70,6 +70,8 @@ fn send_command(state: State<AppState>, command: ServoCommand) -> Result<(), Str
     if let Some(ref mut port) = *locked_port {
         let mut cmd = String::new();
 
+        cmd.push('S');
+
         // 서보 각도 추가
         for angle in &command.angles {
             cmd.push_str(&angle.to_string());
@@ -148,7 +150,9 @@ fn read_status(state: State<AppState>) -> Result<ArduinoStatus, String> {
                 let digital_outputs: Vec<bool> = values[6..9].iter().map(|s| s == &"1").collect();
 
                 let digital_inputs: Vec<bool> = values[9..12].iter().map(|s| s == &"1").collect();
-
+                println!("Servo Angles: {:?}", servo_angles);
+                println!("Digital Outputs: {:?}", digital_outputs);
+                println!("Digital Inputs: {:?}", digital_inputs);
                 Ok(ArduinoStatus {
                     servo_angles,
                     digital_outputs,
