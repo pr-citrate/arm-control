@@ -1,81 +1,64 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import PortSelector from "../components/PortSelector.svelte";
   import ServoSliders from "../components/ServoSliders.svelte";
   import DigitalOutputs from "../components/DigitalOutputs.svelte";
   import DigitalInputs from "../components/DigitalInputs.svelte";
   import StatusMonitor from "../components/StatusMonitor.svelte";
 
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  interface ArduinoStatus {
+    servo_angles: number[];
+    digital_outputs: boolean[];
+    digital_inputs: boolean[];
+  }
 
   interface DigitalInput {
     pin: number;
     state: boolean;
   }
 
-  interface ServoEvent {
-    detail: {
-      id: number;
-      angle: number;
-    };
-  }
+  let status: ArduinoStatus | null = null;
+  let digitalInputs: DigitalInput[] = [];
+  let updateInterval: number;
+  let statusMonitorComponent: InstanceType<typeof StatusMonitor>;
 
-  interface OutputEvent {
-    detail: {
-      pin: number;
-      state: boolean;
-    };
-  }
+  async function updateStatus() {
+    try {
+      const arduinoStatus = await invoke<ArduinoStatus>("read_status");
+      status = arduinoStatus;
 
-  interface StatusEvent {
-    payload: {
-      digitalInputs?: DigitalInput[];
-      [key: string]: unknown;
-    };
-  }
+      digitalInputs = arduinoStatus.digital_inputs.map((state, index) => ({
+        pin: [2, 4, 7][index],
+        state,
+      }));
 
-  let digitalInputs: DigitalInput[] = [
-    { pin: 2, state: false },
-    { pin: 4, state: false },
-    { pin: 7, state: false },
-  ];
-
-  let status = "";
-
-  // Handle servo updates
-  function handleServoUpdate(event: ServoEvent) {
-    invoke("send_servo_command", {
-      id: event.detail.id,
-      angle: event.detail.angle,
-    });
-  }
-
-  // Handle digital output toggles
-  function handleToggleOutput(event: OutputEvent) {
-    invoke("send_digital_output", {
-      pin: event.detail.pin,
-      state: event.detail.state,
-    });
-  }
-
-  // Listen for status updates from backend
-  listen("status_update", (event: StatusEvent) => {
-    const data = event.payload;
-    status = String(data);
-    // Update digital inputs if included in the status
-    if (data.digitalInputs) {
-      digitalInputs = data.digitalInputs;
+      const rawData =
+        `S${arduinoStatus.servo_angles.join(",")}` +
+        `,${arduinoStatus.digital_outputs.map((s) => (s ? "1" : "0")).join(",")}` +
+        `,${arduinoStatus.digital_inputs.map((s) => (s ? "1" : "0")).join(",")}E`;
+      statusMonitorComponent?.updateCommunication("READ_STATUS", rawData);
+    } catch (error) {
+      console.error("Failed to read status:", error);
     }
+  }
+
+  onMount(() => {
+    updateInterval = setInterval(updateStatus, 500);
+  });
+
+  onDestroy(() => {
+    clearInterval(updateInterval);
   });
 </script>
 
 <main class="min-h-screen bg-sky-50 p-8">
-  <h1 class="text-2xl font-bold text-sky-800 mb-8">Tauri Arduino Controller</h1>
+  <h1 class="text-2xl font-bold text-sky-800 mb-8">Tauri Arduino 컨트롤러</h1>
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
     <PortSelector />
-    <ServoSliders on:updateServo={handleServoUpdate} />
-    <DigitalOutputs on:toggleOutput={handleToggleOutput} />
+    <ServoSliders />
+    <DigitalOutputs />
     <DigitalInputs inputs={digitalInputs} />
-    <StatusMonitor {status} />
+    <StatusMonitor bind:this={statusMonitorComponent} {status} />
   </div>
 </main>

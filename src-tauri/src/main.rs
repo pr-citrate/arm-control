@@ -2,145 +2,100 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use serialport::SerialPort;
-use std::io::Read;
-use std::sync::{Arc, Mutex};
+use serialport::{SerialPort, SerialPortType};
+use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{Emitter, Manager, State};
-use tokio::sync::mpsc::{self, Sender};
-use tokio::task;
+use tauri::State;
 
-#[derive(Serialize, Deserialize, Debug)]
+// 상태 구조체
+#[derive(Default)]
+pub struct AppState {
+    port: Mutex<Option<Box<dyn SerialPort>>>,
+}
+
+// 서보 명령 구조체
+#[derive(Serialize, Deserialize)]
 struct ServoCommand {
-    id: u8,
-    angle: u16,
+    angles: Vec<u8>,            // 6개 서보 각도
+    digital_outputs: Vec<bool>, // 3개 디지털 출력
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct DigitalOutputCommand {
-    pin: u8,
-    state: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct StatusUpdate {
-    digital_inputs: Vec<DigitalInputStatus>,
-    status: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct DigitalInputStatus {
-    pin: u8,
-    state: bool,
-}
-
-struct AppState {
-    port: Arc<Mutex<Option<Box<dyn SerialPort + Send>>>>,
-    sender: Mutex<Option<Sender<String>>>,
-}
-
-#[tokio::main]
-async fn main() {
-    let app_state = AppState {
-        port: Arc::new(Mutex::new(None)),
-        sender: Mutex::new(None),
-    };
-
-    tauri::Builder::default()
-        .manage(app_state)
-        .invoke_handler(tauri::generate_handler![
-            list_serial_ports,
-            connect_port,
-            send_servo_command,
-            send_digital_output
-        ])
-        .setup(|app| {
-            let app_handle = app.handle().clone();
-            let state = app_handle.state::<AppState>();
-            let port_clone = Arc::clone(&state.port);
-            let (tx, mut rx) = mpsc::channel::<String>(100);
-            {
-                let mut sender_lock = state.sender.lock().unwrap();
-                *sender_lock = Some(tx.clone());
-            }
-
-            // Task to handle incoming messages and emit to frontend
-            task::spawn(async move {
-                while let Some(message) = rx.recv().await {
-                    if let Err(e) = app_handle.emit("status_update", message) {
-                        eprintln!("Failed to emit status_update: {:?}", e);
-                    }
-                }
-            });
-
-            // Task to read from serial port
-            task::spawn(async move {
-                loop {
-                    let data = {
-                        let mut port = port_clone.lock().unwrap();
-                        if let Some(ref mut port) = *port {
-                            let mut buffer: Vec<u8> = vec![0; 1024];
-                            match port.read(buffer.as_mut_slice()) {
-                                Ok(bytes_read) if bytes_read > 0 => {
-                                    Some(String::from_utf8_lossy(&buffer[..bytes_read]).to_string())
-                                }
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        }
-                    };
-
-                    if let Some(data) = data {
-                        if let Err(e) = tx.send(data).await {
-                            eprintln!("Failed to send data through channel: {:?}", e);
-                        }
-                    }
-
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            });
-
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+// 아두이노 상태 구조체
+#[derive(Serialize, Deserialize)]
+struct ArduinoStatus {
+    servo_angles: Vec<u8>,      // 6개 서보 각도
+    digital_outputs: Vec<bool>, // 3개 디지털 출력
+    digital_inputs: Vec<bool>,  // 3개 디지털 입력
 }
 
 #[tauri::command]
 fn list_serial_ports() -> Result<Vec<String>, String> {
-    serialport::available_ports()
-        .map_err(|e| e.to_string())
-        .map(|ports| {
-            ports
-                .into_iter()
-                .filter_map(|port| Some(port.port_name))
-                .collect::<Vec<String>>()
+    let ports = serialport::available_ports().map_err(|e| e.to_string())?;
+    Ok(ports
+        .into_iter()
+        .filter_map(|p| match p.port_type {
+            SerialPortType::UsbPort(_) => Some(p.port_name),
+            _ => None,
         })
+        .collect())
 }
 
 #[tauri::command]
-fn connect_port(state: State<AppState>, port: String) -> Result<String, String> {
-    let port_result = serialport::new(port, 9600)
+fn connect_port(state: State<AppState>, port: &str) -> Result<String, String> {
+    match serialport::new(port, 9600)
         .timeout(Duration::from_millis(1000))
-        .open();
+        .open()
+    {
+        Ok(mut serial_port) => {
+            // 테스트 메시지 전송
+            let test_cmd = "S90,90,90,90,90,90,0,0,0E\n";
+            serial_port
+                .write_all(test_cmd.as_bytes())
+                .map_err(|e| format!("Failed to write test message: {}", e))?;
+            serial_port
+                .flush()
+                .map_err(|e| format!("Failed to flush: {}", e))?;
 
-    match port_result {
-        Ok(serial_port) => {
             let mut locked_port = state.port.lock().unwrap();
             *locked_port = Some(serial_port);
             Ok("Connected".into())
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(format!("Failed to open port {}: {}", port, e)),
     }
 }
 
 #[tauri::command]
-fn send_servo_command(state: State<AppState>, command: ServoCommand) -> Result<(), String> {
+fn send_command(state: State<AppState>, command: ServoCommand) -> Result<(), String> {
     let mut locked_port = state.port.lock().unwrap();
     if let Some(ref mut port) = *locked_port {
-        let cmd = format!("S{}:{}\n", command.id, command.angle);
-        port.write(cmd.as_bytes()).map_err(|e| e.to_string())?;
+        let mut cmd = String::new();
+
+        // 서보 각도 추가
+        for angle in &command.angles {
+            cmd.push_str(&angle.to_string());
+            cmd.push(',');
+        }
+
+        // 디지털 출력 추가
+        for output in &command.digital_outputs {
+            cmd.push_str(if *output { "1" } else { "0" });
+            cmd.push(',');
+        }
+
+        // 마지막 쉼표 제거하고 종료 비트 추가
+        cmd.pop(); // 마지막 쉼표 제거
+        cmd.push('E');
+        cmd.push('\n');
+
+        // 명령 전송
+        port.write_all(cmd.as_bytes())
+            .map_err(|e| format!("Failed to write command: {}", e))?;
+        port.flush()
+            .map_err(|e| format!("Failed to flush: {}", e))?;
+
+        // 콘솔에 전송된 명령 출력
+        println!("Sent command: {}", cmd);
+
         Ok(())
     } else {
         Err("Port not connected".into())
@@ -148,17 +103,77 @@ fn send_servo_command(state: State<AppState>, command: ServoCommand) -> Result<(
 }
 
 #[tauri::command]
-fn send_digital_output(
-    state: State<AppState>,
-    command: DigitalOutputCommand,
-) -> Result<(), String> {
+fn read_status(state: State<AppState>) -> Result<ArduinoStatus, String> {
     let mut locked_port = state.port.lock().unwrap();
     if let Some(ref mut port) = *locked_port {
-        let state_str = if command.state { "HIGH" } else { "LOW" };
-        let cmd = format!("D{}:{}\n", command.pin, state_str);
-        port.write(cmd.as_bytes()).map_err(|e| e.to_string())?;
-        Ok(())
+        let mut buffer = [0u8; 1024];
+
+        // 버퍼 비우기
+        while port.bytes_to_read().map_err(|e| e.to_string())? > 0 {
+            let _ = port.read(&mut buffer);
+        }
+
+        // 상태 요청 명령 전송 (모든 서보 90도, 모든 출력 LOW)
+        let request = "S90,90,90,90,90,90,0,0,0E\n";
+        port.write_all(request.as_bytes())
+            .map_err(|e| format!("Failed to write status request: {}", e))?;
+        port.flush()
+            .map_err(|e| format!("Failed to flush: {}", e))?;
+
+        // 응답 대기
+        std::thread::sleep(Duration::from_millis(50));
+
+        // 응답 읽기
+        let n = port
+            .read(&mut buffer)
+            .map_err(|e| format!("Failed to read from port: {}", e))?;
+
+        let response = String::from_utf8_lossy(&buffer[..n]);
+
+        // 유효한 응답 찾기
+        let response = response
+            .lines()
+            .find(|line| line.starts_with('S') && line.ends_with('E'))
+            .ok_or_else(|| "No valid status message found".to_string())?;
+
+        // 응답 파싱
+        if response.starts_with('S') && response.ends_with('E') {
+            let data = &response[1..response.len() - 1];
+            let values: Vec<&str> = data.split(',').collect();
+
+            if values.len() >= 12 {
+                let servo_angles: Vec<u8> =
+                    values[..6].iter().filter_map(|s| s.parse().ok()).collect();
+
+                let digital_outputs: Vec<bool> = values[6..9].iter().map(|s| s == &"1").collect();
+
+                let digital_inputs: Vec<bool> = values[9..12].iter().map(|s| s == &"1").collect();
+
+                Ok(ArduinoStatus {
+                    servo_angles,
+                    digital_outputs,
+                    digital_inputs,
+                })
+            } else {
+                Err("Invalid status format".into())
+            }
+        } else {
+            Err("Invalid status message".into())
+        }
     } else {
         Err("Port not connected".into())
     }
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            list_serial_ports,
+            connect_port,
+            send_command,
+            read_status
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
