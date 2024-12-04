@@ -118,8 +118,8 @@ fn read_status(state: State<AppState>) -> Result<ArduinoStatus, String> {
             let _ = port.read(&mut buffer);
         }
 
-        // 상태 요청 명령 전송 (모든 서보 90도, 모든 출력 LOW)
-        let request = "S90,90,90,90,90,90,0,0,0E\n";
+        // 상태 요청 명령 전송 (모 명령으로 변경)
+        let request = "SE\n"; // 단순히 시작과 끝 비트만 보냄
         println!(
             "Requesting status with command: {}",
             request.replace('\n', "")

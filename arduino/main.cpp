@@ -36,6 +36,13 @@ void handleCommand(String cmd)
   // 시작 비트와 종료 비트를 제외한 데이터 추출
   String data = cmd.substring(1, cmd.length() - 1);
 
+  // 데이터가 비어있으면 현재 상태만 반환
+  if (data.length() == 0)
+  {
+    sendStatus();
+    return;
+  }
+
   // 데이터를 쉼표로 분리
   int values[9]; // 6개 서보 + 3개 디지털 출력
   int index = 0;
@@ -64,6 +71,37 @@ void handleCommand(String cmd)
   }
 
   // 현재 상태 응답
+  String response = String(START_BIT);
+
+  // 서보 각도 추가
+  for (int i = 0; i < 6; i++)
+  {
+    response += String(servos[i].read());
+    response += DELIMITER;
+  }
+
+  // 디지털 출력 상태 추가
+  for (int i = 0; i < 3; i++)
+  {
+    response += String(digitalRead(digitalOutputs[i]));
+    response += DELIMITER;
+  }
+
+  // 디지털 입력 상태 추가
+  for (int i = 0; i < 3; i++)
+  {
+    response += String(digitalRead(digitalInputs[i]));
+    if (i < 2)
+      response += DELIMITER;
+  }
+
+  response += END_BIT;
+  Serial.println(response);
+}
+
+// 상태 전송을 위한 새로운 함수
+void sendStatus()
+{
   String response = String(START_BIT);
 
   // 서보 각도 추가
