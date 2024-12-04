@@ -42,11 +42,13 @@ fn list_serial_ports() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn connect_port(state: State<AppState>, port: &str) -> Result<String, String> {
+    println!("Connecting to port: {}", port);
     match serialport::new(port, 9600)
         .timeout(Duration::from_millis(1000))
         .open()
     {
         Ok(mut serial_port) => {
+            println!("Successfully connected to port: {}", port);
             // 테스트 메시지 전송
             let test_cmd = "S90,90,90,90,90,90,0,0,0E\n";
             serial_port
@@ -60,7 +62,10 @@ fn connect_port(state: State<AppState>, port: &str) -> Result<String, String> {
             *locked_port = Some(serial_port);
             Ok("Connected".into())
         }
-        Err(e) => Err(format!("Failed to open port {}: {}", port, e)),
+        Err(e) => {
+            println!("Failed to open port {}: {}", port, e);
+            Err(format!("Failed to open port {}: {}", port, e))
+        }
     }
 }
 
@@ -90,13 +95,11 @@ fn send_command(state: State<AppState>, command: ServoCommand) -> Result<(), Str
         cmd.push('\n');
 
         // 명령 전송
+        println!("Sending command: {}", cmd.replace('\n', ""));
         port.write_all(cmd.as_bytes())
             .map_err(|e| format!("Failed to write command: {}", e))?;
         port.flush()
             .map_err(|e| format!("Failed to flush: {}", e))?;
-
-        // 콘솔에 전송된 명령 출력
-        println!("\nSent command: {}", cmd.replace('\n', ""));
 
         Ok(())
     } else {
@@ -117,6 +120,10 @@ fn read_status(state: State<AppState>) -> Result<ArduinoStatus, String> {
 
         // 상태 요청 명령 전송 (모든 서보 90도, 모든 출력 LOW)
         let request = "S90,90,90,90,90,90,0,0,0E\n";
+        println!(
+            "Requesting status with command: {}",
+            request.replace('\n', "")
+        );
         port.write_all(request.as_bytes())
             .map_err(|e| format!("Failed to write status request: {}", e))?;
         port.flush()
@@ -131,6 +138,7 @@ fn read_status(state: State<AppState>) -> Result<ArduinoStatus, String> {
             .map_err(|e| format!("Failed to read from port: {}", e))?;
 
         let response = String::from_utf8_lossy(&buffer[..n]);
+        println!("Received response: {}", response);
 
         // 유효한 응답 찾기
         let response = response
@@ -150,9 +158,9 @@ fn read_status(state: State<AppState>) -> Result<ArduinoStatus, String> {
                 let digital_outputs: Vec<bool> = values[6..9].iter().map(|s| s == &"1").collect();
 
                 let digital_inputs: Vec<bool> = values[9..12].iter().map(|s| s == &"1").collect();
-                println!("Servo Angles: {:?}", servo_angles);
-                println!("Digital Outputs: {:?}", digital_outputs);
-                println!("Digital Inputs: {:?}", digital_inputs);
+                println!("Parsed Servo Angles: {:?}", servo_angles);
+                println!("Parsed Digital Outputs: {:?}", digital_outputs);
+                println!("Parsed Digital Inputs: {:?}", digital_inputs);
                 Ok(ArduinoStatus {
                     servo_angles,
                     digital_outputs,
