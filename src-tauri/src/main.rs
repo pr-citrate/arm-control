@@ -96,7 +96,7 @@ fn send_command(state: State<AppState>, command: ServoCommand) -> Result<(), Str
             .map_err(|e| format!("Failed to flush: {}", e))?;
 
         // 콘솔에 전송된 명령 출력
-        println!("Sent command: {}", cmd);
+        println!("\nSent command: {}", cmd.replace('\n', ""));
 
         Ok(())
     } else {
